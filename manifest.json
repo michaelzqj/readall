@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Read All",
+  "version": "1.0.0",
+  "description": "Mark all emails as read in Gmail, Outlook, and Yahoo Mail.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://outlook.live.com/*",
+    "https://outlook.office365.com/*",
+    "https://mail.yahoo.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://outlook.live.com/*",
+        "https://outlook.office365.com/*",
+        "https://mail.yahoo.com/*"
+      ],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_end"
+    }
+  ],
+  "icons": {
+    "16": "public/icon.svg",
+    "48": "public/icon.svg",
+    "128": "public/icon.svg"
+  }
+}
