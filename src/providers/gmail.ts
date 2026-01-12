@@ -15,11 +15,9 @@ export class GmailProvider implements IEmailProvider {
   }
 
   async selectAll(): Promise<void> {
-    // Strategy: Try to select ONLY unread emails first (User Request).
-    // This avoids "Select All" warning for massive inboxes.
-    
-    // 1. Locate the Toolbar
-    // We reuse the logic to find the toolbar area via the Master Checkbox heuristic
+    console.log('Read All: Starting Bulk Selection Strategy...');
+
+    // 1. Find the Master Checkbox
     const allCheckboxes = Array.from(document.querySelectorAll('[role="checkbox"]'));
     const toolbarCheckboxes = allCheckboxes.filter(cb => {
         if ((cb as HTMLElement).offsetParent === null) return false;
@@ -30,119 +28,95 @@ export class GmailProvider implements IEmailProvider {
     toolbarCheckboxes.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
     const masterCheckbox = toolbarCheckboxes[0];
 
-    if (!masterCheckbox) {
-        throw new Error('Could not find the toolbar.');
+    if (!masterCheckbox) throw new Error('Could not find toolbar checkbox.');
+
+    // 2. Click Master Checkbox (Selects current page)
+    if (masterCheckbox.getAttribute('aria-checked') !== 'true' && masterCheckbox.getAttribute('aria-checked') !== 'mixed') {
+        simulateClick(masterCheckbox as HTMLElement);
+        
+        // Wait for selection to register
+        await new Promise(r => setTimeout(r, 500));
     }
 
-    const toolbarContainer = masterCheckbox.parentElement?.parentElement;
+    // 3. Look for "Select all [number] conversations in Inbox" Banner
+    // This is the key step for "All History"
+    console.log('Read All: Checking for Bulk Select Banner...');
     
-    // 2. Try to find the "Select" Dropdown Arrow (Triangle)
-    // It's usually a button next to the checkbox with aria-haspopup="true" or similar.
-    // In standard Gmail, it's often a div with role="button" and aria-label="Select" 
-    // sitting right next to the checkbox div.
-    let dropdownBtn: HTMLElement | null = null;
+    // The banner usually appears in a notification area below the toolbar
+    // We look for a span with role="link" or similar behavior that contains "Select all"
+    // Note: In different languages "Select all" differs, but the structure is usually consistent.
+    // It's often the *only* link in the 'v1' alert class, but classes change.
     
-    if (toolbarContainer) {
-        dropdownBtn = toolbarContainer.querySelector('div[role="button"][aria-label*="Select"]') as HTMLElement;
-        // Verify it's not the checkbox itself (sometimes they share labels)
-        if (dropdownBtn === masterCheckbox) {
-            // Look for siblings
-            dropdownBtn = toolbarContainer.querySelector('div[role="menuitem"]') ? null : // sanity check
-                          Array.from(toolbarContainer.querySelectorAll('div[role="button"]'))
-                            .find(el => el !== masterCheckbox) as HTMLElement;
-        }
-    }
+    // We try to find a link that looks like a bulk selector
+    const links = Array.from(document.querySelectorAll('span[role="link"], div[role="link"]'));
+    const bulkLink = links.find(el => {
+        const text = el.textContent || '';
+        // Heuristic: specific Gmail ID or text patterns
+        return el.id === 'link_vsm' || (text.includes('Select all') && text.includes('conversation'));
+    });
 
-    let unreadSelected = false;
-
-    if (dropdownBtn) {
-        // Try the Dropdown -> "Unread" flow
-        simulateClick(dropdownBtn);
-        await new Promise(r => setTimeout(r, 200)); // Wait for menu
+    if (bulkLink && (bulkLink as HTMLElement).offsetParent !== null) {
+        console.log('Read All: Found Bulk Link! Clicking to select entire history...');
+        simulateClick(bulkLink as HTMLElement);
         
-        // Find "Unread" menu item
-        // Common logic: role="menuitem", text content "Unread"
-        // We also check for "Unread" in other languages or by position (usually 4th) if we wanted to be fancy.
-        // For now, English "Unread" is the target.
-        const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"]'));
-        const unreadItem = menuItems.find(el => el.textContent === 'Unread');
-        
-        if (unreadItem) {
-            simulateClick(unreadItem as HTMLElement);
-            console.log('Read All: Selected "Unread" via dropdown.');
-            unreadSelected = true;
-            // Wait for selection to apply
-             await new Promise(r => setTimeout(r, 500));
-        } else {
-            // Close menu if failed
-            simulateClick(dropdownBtn); 
-        }
+        // Wait for the "All conversations selected" confirmation message
+        await new Promise(r => setTimeout(r, 1000));
+    } else {
+        console.log('Read All: No bulk link found. Assuming clean inbox or < 50 items.');
     }
-
-    // 3. Fallback: Click the Master Checkbox (Select All Visible)
-    // If we couldn't do the fancy "Unread Only" selection, we just select the current page.
-    if (!unreadSelected) {
-        console.log('Read All: "Unread" option not found, falling back to Select All Visible.');
-        
-        if (masterCheckbox.getAttribute('aria-checked') !== 'true' && masterCheckbox.getAttribute('aria-checked') !== 'mixed') {
-            simulateClick(masterCheckbox as HTMLElement);
-            
-            // Wait for verification
-            let retries = 0;
-            while (retries < 10) {
-                await new Promise(r => setTimeout(r, 200));
-                const state = masterCheckbox.getAttribute('aria-checked');
-                if (state === 'true' || state === 'mixed') break;
-                retries++;
-            }
-        }
-    }
-
-    // REMOVED: The "Select all [number] conversations" logic.
-    // This was causing the "Action will affect 45,000 conversations" popup.
-    // By removing it, we only act on the loaded emails (safe).
   }
 
   async markAsRead(): Promise<void> {
-    // Strategy: Find "Mark as read" button.
-    // 1. Try English label
+    // 1. Click "Mark as read"
     let markReadBtn = document.querySelector('div[role="button"][aria-label="Mark as read"]');
-    
-    // 2. Try Tooltip (sometimes differs)
     if (!markReadBtn) {
-        markReadBtn = document.querySelector('div[data-tooltip="Mark as read"]');
+         markReadBtn = document.querySelector('div[data-tooltip="Mark as read"]');
     }
 
-    // 3. Fallback: Look for the specific Icon (SVG path) if possible, or try the "More" menu.
-    // If we can't find the direct button, we try the "More" menu.
     if (!markReadBtn) {
-        const moreBtn = document.querySelector('div[role="button"][aria-label="More"]') || 
-                        document.querySelector('div[role="button"][data-tooltip="More"]');
-                        
-        if (moreBtn) {
+         // Try More menu logic
+         const moreBtn = document.querySelector('div[role="button"][aria-label="More"]');
+         if (moreBtn) {
             simulateClick(moreBtn as HTMLElement);
-            await new Promise(resolve => setTimeout(resolve, 300));
-            
-            // In the menu, find "Mark as read"
-            const menuItems = document.querySelectorAll('div[role="menuitem"]');
-            // This IS text dependent. 
-            const markReadItem = Array.from(menuItems).find(el => 
-                el.textContent === 'Mark as read' || 
-                el.textContent === 'Mark as Read'
-            );
-            
+            await new Promise(r => setTimeout(r, 300));
+            const menuItems = Array.from(document.querySelectorAll('div[role="menuitem"]'));
+            const markReadItem = menuItems.find(el => el.textContent === 'Mark as read');
             if (markReadItem) {
                 simulateClick(markReadItem as HTMLElement);
+                // Handle modal after this
+                await this.handleBulkModal();
                 return;
             }
-        }
+         }
+         throw new Error('Could not find "Mark as read" button.');
     }
 
-    if (markReadBtn) {
-        simulateClick(markReadBtn as HTMLElement);
-    } else {
-        throw new Error('Could not find "Mark as read" button. Is your Gmail in English?');
-    }
+    simulateClick(markReadBtn as HTMLElement);
+    
+    // 2. Handle Potential "Bulk Action" Modal
+    await this.handleBulkModal();
+  }
+
+  // Helper to click "OK" on the "This will affect all conversations" popup
+  private async handleBulkModal(): Promise<void> {
+      // Wait briefly to see if modal appears
+      await new Promise(r => setTimeout(r, 1000));
+
+      const modal = document.querySelector('div[role="alertdialog"]');
+      if (modal) {
+          console.log('Read All: Bulk Action Modal detected. Auto-confirming...');
+          
+          // Find the "OK" button. 
+          // It's usually name="ok" or text "OK".
+          const buttons = Array.from(modal.querySelectorAll('button'));
+          const okBtn = buttons.find(b => b.name === 'ok' || b.textContent === 'OK');
+          
+          if (okBtn) {
+              simulateClick(okBtn);
+              // Wait for the heavy operation to start processing
+              await new Promise(r => setTimeout(r, 2000));
+          }
+      }
   }
 
   async deselectAll(): Promise<void> {
